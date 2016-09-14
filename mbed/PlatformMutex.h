@@ -13,35 +13,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef MBED_FILELIKE_H
-#define MBED_FILELIKE_H
+#ifndef PLATFORM_MUTEX_H
+#define PLATFORM_MUTEX_H
 
-#include "FileBase.h"
-#include "FileHandle.h"
-
-namespace mbed {
-
-/* Class FileLike
- *  A file-like object is one that can be opened with fopen by
- *  fopen("/name", mode). It is intersection of the classes Base and
- *  FileHandle.
- *
- *  @Note Synchronization level: Set by subclass
- */
-class FileLike : public FileHandle, public FileBase {
-
+#ifdef MBED_CONF_RTOS_PRESENT
+#include "Mutex.h"
+typedef rtos::Mutex PlatformMutex;
+#else
+/** A stub mutex for when an RTOS is not present
+*/
+class PlatformMutex {
 public:
-    /* Constructor FileLike
-     *
-     * Variables
-     *  name - The name to use to open the file.
-     */
-    FileLike(const char *name);
+    PlatformMutex() {
+        // Stub
 
-    virtual ~FileLike();
+    }
+    ~PlatformMutex() {
+        // Stub
+    }
 
+    void lock() {
+        // Do nothing
+    }
+
+    void unlock() {
+        // Do nothing
+    }
 };
 
-} // namespace mbed
+#endif
 
 #endif

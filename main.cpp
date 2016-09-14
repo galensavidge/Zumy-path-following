@@ -1,6 +1,10 @@
 /*
  * A sample path following program for the Zumy board.
  * Author: Galen Savidge
+ *
+ * Behavior: Zumy moves along the track until no line is found for LINE_END_TIME
+ * cycles. Line position is recorded every frame as an 8 bit unsigned int. Line
+ * position data is then output to serial.
  */
 
 #include "mbed.h"
@@ -9,7 +13,7 @@
 /***** Constants ******/
 #define CAM_INTEGRATION_TIME 80
 
-#define LINE_THRESHOLD 12000
+#define LINE_THRESHOLD 3000
 #define LINE_PRECISION 2
 #define LINE_CROP_AMOUNT 4
 
@@ -17,8 +21,8 @@
 #define TURN_SENS_INNER 1.5F
 #define TURN_SENS_OUTER 0.5F
 
-#define SENSOR_FOV_MM 20
-#define ZUMY_LENGTH_MM 40
+#define LINE_HIST_SIZE 12000
+#define LINE_END_TIME 25
 
 // Sensor pins
 #define clk p16
@@ -41,16 +45,20 @@ DigitalOut led4(LED4);
 // USB serial
 Serial pc(USBTX, USBRX);
 
+// Data storage
+uint8_t line_hist[LINE_HIST_SIZE];
+uint16_t hist_index;
+
 /***** Helper functions *****/
 float max(float a, float b);
 
 // Sets the 4 LEDS on the mbed board to the four given binary values
 void setLEDs(uint8_t a, uint8_t b, uint8_t c, uint8_t d);
 
-// Steers by linearly decreasing the inner wheel speed as the line moves from the center
+// Steers by linearly decreasing the inner wheel speed as the line moves from the center (unused in this program)
 void steerStupid(int8_t line_pos);
 
-// Based on steerStupid; adds the ability for the inner wheel to rotate in reverse
+// Based on steerStupid; adds the ability for the inner wheel to rotate in reverse (unused in this program)
 void steerPointTurns(int8_t line_pos);
 
 // Based on steerPointTurns; the outer wheel moves faster the farther the line is from center
@@ -61,58 +69,27 @@ int main()
     /********** SENSOR SETUP **********/
     TSL1401CL cam(clk, si, adc);
     cam.setIntegrationTime(CAM_INTEGRATION_TIME);
-    /*
-    int line_hist[16];
-    uint16_t hist_index = 0;
-
-    Timer loop_timer;
-    loop_timer.start();
-    uint32_t last_loop_time;
-    */
-
+    
     int8_t line_pos = -1;
     int8_t line_pos_previous = -1;
+    uint8_t line_lost_time = 0;
+    
+    hist_index = 0;
 
     // Read garbage data
     while(!cam.integrationReady());
     cam.read();
 
     while(1) {
-        /***** Read the line sensor *****/
+        /***** Read line sensor *****/
         while(!cam.integrationReady()); // Wait for integration
         cam.read();
 
-        /***** Camera testing *****/
-        /*if(hist_index >= 1000) {
-            line_hist[hist_index - 1000] = cam.findLineEdge(LINE_THRESHOLD, LINE_PRECISION, LINE_CROP_AMOUNT);
-        }
-        hist_index++;
-        if(hist_index == 1016) {
-            pc.printf("---------- Raw camera data ----------\n");
-            for(int i = 0; i < TSL1401CL_PIXEL_COUNT; i++) {
-                pc.printf("%d\n",cam.getData(i));
-            }
-
-            pc.printf("---------- Line positions ----------\n");
-            for(int i = 1000; i < 1016; i++) {
-                pc.printf("%d\n",line_hist[i - 1000]);
-            }
-            pc.printf("Loop time: %d\n", last_loop_time);
-
-            hist_index = 0;
-        }*/
-
         /***** Line following loop *****/
 
-        // Test to see if both edges are in the sensor FOV, and if they aren't, check
         line_pos = cam.findLineEdge(LINE_THRESHOLD, LINE_PRECISION, LINE_CROP_AMOUNT);
-        
-        //line_pos = cam.findLineCenter(LINE_THRESHOLD, LINE_PRECISION, LINE_CROP_AMOUNT);
-        //if(line_pos == -1) line_pos = cam.findLineEdge(LINE_THRESHOLD, LINE_PRECISION, LINE_CROP_AMOUNT, false);
-        //if(line_pos == -1) line_pos = cam.findLineEdge(LINE_THRESHOLD, LINE_PRECISION, LINE_CROP_AMOUNT, true);
 
-
-        if(line_pos != -1) {
+        if(line_pos != -1) { // On the line
             // Set LEDs based on the position of the line
             if(line_pos < (TSL1401CL_PIXEL_COUNT - 2*LINE_CROP_AMOUNT)/4) {
                 setLEDs(1, 0, 0, 0);
@@ -123,21 +100,49 @@ int main()
             } else {
                 setLEDs(0, 0, 0, 1);
             }
-
+            
+            // Record the line position
+            line_hist[hist_index] = line_pos;
+            hist_index++;
+            line_lost_time = 0;
+            
             // Steer the vehicle
             steerImprovedPointTurns(line_pos);
 
             line_pos_previous = line_pos;
-        } else {
-            // Lost the line
+        }
+        else { // Lost the line
             setLEDs(1, 1, 1, 1);
-            
-            // Steer at maximum turn angle towards the last known line direction
-            if(line_pos_previous >= TSL1401CL_PIXEL_COUNT/2) {
-                steerImprovedPointTurns(TSL1401CL_PIXEL_COUNT - 1 - LINE_CROP_AMOUNT);
-            } else {
-                steerImprovedPointTurns(LINE_CROP_AMOUNT);
+            if(abs(line_pos_previous - TSL1401CL_PIXEL_COUNT/2) > TSL1401CL_PIXEL_COUNT/4) {
+                // Steer at maximum turn angle towards the last known line direction
+                if(line_pos_previous >= TSL1401CL_PIXEL_COUNT/2) {
+                    steerImprovedPointTurns(TSL1401CL_PIXEL_COUNT - 1 - LINE_CROP_AMOUNT);
+                    //line_hist[hist_index] = TSL1401CL_PIXEL_COUNT - 1 - LINE_CROP_AMOUNT;
+                }
+                else {
+                    steerImprovedPointTurns(LINE_CROP_AMOUNT);
+                    //line_hist[hist_index] = LINE_CROP_AMOUNT;
+                }
+                line_hist[hist_index] = 0;
+                hist_index++;
             }
+            else {
+                line_lost_time++;
+                if(line_lost_time >= LINE_END_TIME) {
+                    // Line end; transmit data to PC
+                    m1_fwd.write(0);
+                    m2_fwd.write(0);
+                    while(!pc.readable());
+                    pc.printf("----- Start line data -----\n");
+                    for(int i = 0; i <= hist_index; i++) {
+                        pc.printf("%d\n",line_hist[i]);
+                    }
+                    while(1);
+                }
+            }
+        }
+        if(hist_index > LINE_HIST_SIZE) {
+            hist_index = 0;
         }
     }
 }
@@ -210,10 +215,12 @@ void steerPointTurns(int8_t line_pos)
 void steerImprovedPointTurns(int8_t line_pos)
 {
     line_pos -= TSL1401CL_PIXEL_COUNT/2; // Find offset from center
-
+    
+    // Find desired motor voltages based on the controller
     float pwm_outer = SPEED_PWM*(1.0F + TURN_SENS_OUTER*abs(line_pos)*2.0F/(float)TSL1401CL_PIXEL_COUNT);
     float pwm_inner = SPEED_PWM*(1.0F - TURN_SENS_INNER*abs(line_pos)*2.0F/(float)TSL1401CL_PIXEL_COUNT);
 
+    // Write to the appropriate PWM pins
     if(line_pos < 0) {
         m1_fwd.write(pwm_outer);
         m1_back.write(0);
