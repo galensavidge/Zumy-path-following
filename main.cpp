@@ -2,9 +2,12 @@
  * A sample path following program for the Zumy board.
  * Author: Galen Savidge
  *
- * Behavior: Zumy moves along the track until no line is found for LINE_END_TIME
- * cycles. Line position is recorded every frame as an 8 bit unsigned int. Line
- * position data is then output to serial.
+ * Behavior:
+ * Zumy follows the edge of the line until no line is found for LINE_END_TIME
+ * cycles. Line position is recorded every frame as an 8 bit unsigned int. The
+ * general area of the line is shown on the 4 LEDs on the mbed board. If a line
+ * is not found all 4 LEDs are turned on. The Zumy stops and ine position data 
+ * is output to serial once the end of the track is reached.
  */
 
 #include "mbed.h"
@@ -13,14 +16,19 @@
 /***** Constants ******/
 #define CAM_INTEGRATION_TIME 80
 
+// Higher line threshold -> the sensor will only recognize larger changes in
+// brightness as a line edge
 #define LINE_THRESHOLD 3000
 #define LINE_PRECISION 2
 #define LINE_CROP_AMOUNT 4
 
+// These constants define the base pwm across the motors and how much the controller
+// adjusts based on position of the line relative to the sensor
 #define SPEED_PWM 0.125
 #define TURN_SENS_INNER 1.5F
 #define TURN_SENS_OUTER 0.5F
 
+// Defines data 
 #define LINE_HIST_SIZE 12000
 #define LINE_END_TIME 25
 
@@ -29,7 +37,7 @@
 #define si p17
 #define adc p18
 
-// Motors
+// Motors -- As labelled on the Zumy mbed board
 PwmOut m1_fwd(p21);
 PwmOut m1_back(p22);
 
